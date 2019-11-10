@@ -1,0 +1,164 @@
+desc: K-Stereo
+
+slider1:0<-60,12,.1>Dry (incl Mid/Side)
+slider2:0<-20,12,.1>Wet (enhancer)
+slider3:0<0,1,1{On,Off}>Wide
+slider4:0<0,1,1{On,Off}>Feedback
+slider5:0<-60,24,.1>Mid gain (pre-enhancer)
+slider6:0<-60,24,.1>Side gain (pre-enhancer)
+
+slider7:1<0,1,1{On,Off}>Wet High-pass
+slider8:500<20,20000,1>HP Frequency
+slider9:1<0,1,1{On,Off}>Wet Low-pass
+slider10:5000<20,20000,1>LP Frequency
+
+
+@init
+scale = log( 10.0 ) * 0.05;
+delay_ms = 30;
+buf_size = ceil( delay_ms * srate * 0.001 );
+pos = 0;
+feedback_damp = exp( -16.95 * scale ) / exp( -2 * scale );
+
+//memory management
+l_buf = 1000;
+r_buf = l_buf + buf_size + 1;
+memset( l_buf, 0 , buf_size * 2 );
+
+//filters
+pi = 3.1415926535897932384626433832795;
+e = 2.718281828459045;
+ln_2 = 0.693147180559945;
+
+
+@slider
+dry = exp( slider1 * scale );
+slider1 == -60 ? dry = 0;
+wet = exp( slider2 * scale );
+
+slider3 == 0 ? wide = -1 : wide = 1;
+slider4 == 0 ? deep = 1 : deep = 0;
+M_gain = exp( slider5 * scale );
+S_gain = exp( slider6 * scale );
+
+//filters
+slider7 == 0 ? hp = 1 : hp = 0;
+slider9 == 0 ? lp = 1 : lp = 0;
+
+//-----------------------------------------------------------
+//High-pass
+f0 = slider8;
+w0 = 2 * pi * f0 / srate;
+cos_w0 = cos(w0);
+sin_w0 = sin(w0);
+
+//ny alpha
+q = sqrt(2);
+alpha = sin_w0 / ( 2 * q );
+
+b0 =  (1 + cos_w0)/2;
+b1 = -(1 + cos_w0);
+b2 =  (1 + cos_w0)/2;
+a0 =   1 + alpha;
+a1 =  -2 * cos_w0;
+a2 =   1 - alpha;
+
+//Pre-calculate b0,b1 and b2 divided by a0
+//High-pass
+b0_a0 = b0/a0;
+b1_a0 = b1/a0;
+b2_a0 = b2/a0;
+a1_a0 = a1/a0;
+a2_a0 = a2/a0;
+
+//-----------------------------------------------------------
+//Low_pass
+f0 = slider10;
+w0 = 2 * pi * f0 / srate;
+cos_w0 = cos(w0);
+sin_w0 = sin(w0);
+
+//ny alpha
+q = sqrt(2);
+alpha = sin_w0 / ( 2 * q );
+
+lp_b0 = (1 - cos_w0)/2;
+lp_b1 = 1 - cos_w0;
+lp_b2 = (1 - cos_w0)/2;
+lp_a0 =   1 + alpha;
+lp_a1 =  -2 * cos_w0;
+lp_a2 =   1 - alpha;
+
+//Pre-calculate b0,b1 and b2 divided by a0
+//Low_pass
+lp_b0_a0 = lp_b0 / lp_a0;
+lp_b1_a0 = lp_b1 / lp_a0;
+lp_b2_a0 = lp_b2 / lp_a0;
+lp_a1_a0 = lp_a1 / lp_a0;
+lp_a2_a0 = lp_a2 / lp_a0;
+
+
+@sample
+M = ( spl0 + spl1 ) * 0.5;
+S = ( spl0 + spl1 * -1 ) * 0.5;
+
+spl0 = S * S_gain  + M * M_gain;
+spl1 = -S * S_gain + M * M_gain;
+
+del_l = l_buf[ pos ];
+del_r = r_buf[ pos ] * wide;
+
+l_buf[ pos ] = ( spl0 + del_r * deep ) * feedback_damp ;
+r_buf[ pos ] = ( spl1 + del_l * deep ) * feedback_damp ;
+pos += 1;
+pos > buf_size ? pos = 0;
+
+//filters
+
+//High-pass
+
+hp ? 
+(
+
+l = del_l;
+del_l = b0_a0*del_l + b1_a0*l_prev_bf_eq + b2_a0*l_prev2_bf_eq - a1_a0*l_prev_af_eq - a2_a0*l_prev2_af_eq ;
+l_prev2_bf_eq = l_prev_bf_eq;
+l_prev_bf_eq = l;
+l_prev2_af_eq = l_prev_af_eq;
+l_prev_af_eq = del_l;
+
+r = del_r;
+del_r = b0_a0*del_r + b1_a0*r_prev_bf_eq + b2_a0*r_prev2_bf_eq - a1_a0*r_prev_af_eq - a2_a0*r_prev2_af_eq ;
+r_prev2_bf_eq = r_prev_bf_eq;
+r_prev_bf_eq = r;
+r_prev2_af_eq = r_prev_af_eq;
+r_prev_af_eq = del_r;
+
+);
+
+//Low_pass
+
+lp ?
+(
+
+lp_l = del_l;
+del_l = lp_b0_a0*del_l + lp_b1_a0*lp_l_prev_bf_eq + lp_b2_a0*lp_l_prev2_bf_eq - lp_a1_a0*lp_l_prev_af_eq - lp_a2_a0*lp_l_prev2_af_eq;
+lp_l_prev2_bf_eq = lp_l_prev_bf_eq;
+lp_l_prev_bf_eq = lp_l;
+lp_l_prev2_af_eq = lp_l_prev_af_eq;
+lp_l_prev_af_eq = del_l;
+
+lp_r = del_r;
+del_r = lp_b0_a0*del_r + lp_b1_a0*lp_r_prev_bf_eq + lp_b2_a0*lp_r_prev2_bf_eq - lp_a1_a0*lp_r_prev_af_eq - lp_a2_a0*lp_r_prev2_af_eq ;
+lp_r_prev2_bf_eq = lp_r_prev_bf_eq;
+lp_r_prev_bf_eq = lp_r;
+lp_r_prev2_af_eq = lp_r_prev_af_eq;
+lp_r_prev_af_eq = del_r;
+
+);
+
+
+//output
+
+spl0 = spl0 * dry + del_r * wet;
+spl1 = spl1 * dry + del_l * wet;
